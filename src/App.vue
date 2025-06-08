@@ -1,162 +1,188 @@
 <template>
   <div class="container">
-    <div class="editor-panel">
-      <input v-model="fileName" placeholder="Filename..." class="filename-input" />
-      <textarea v-model="code" placeholder="Start typing your Go code here..." class="code-editor"></textarea>
-      <div class="button-row">
-        <button @click="runCode" :disabled="!isWsConnected">Run Code (Go Agent)</button>
-        <button @click="saveFile">Save File (PocketBase)</button>
-        <button @click="loadFile">Load File (PocketBase)</button>
-        <button @click="clearOutput">Clear Console</button>
-      </div>
-    </div>
-    <div class="output-panel">
-      <h3>Agent Output Console</h3>
-      <div class="output-console">
-        <div v-for="(line, idx) in agentOutput" :key="idx">{{ line }}</div>
-      </div>
-    </div>
-    <div v-if="messageBox.show" class="modal">
+    <div v-if="isAuthModalOpen" class="modal">
       <div class="modal-content">
-        <p>{{ messageBox.text }}</p>
-        <button @click="messageBox.show = false">OK</button>
+        <h2>{{ authMode === 'login' ? 'Login' : 'Register' }}</h2>
+        <input v-model="authForm.email" placeholder="Email" />
+        <input v-model="authForm.password" type="password" placeholder="Password" />
+        <input v-if="authMode === 'register'" v-model="authForm.passwordConfirm" type="password" placeholder="Confirm Password" />
+        <div v-if="authError" class="error">{{ authError }}</div>
+        <button @click="authMode === 'login' ? login() : register()">
+          {{ authMode === 'login' ? 'Login' : 'Register' }}
+        </button>
+        <a href="#" @click.prevent="authMode = authMode === 'login' ? 'register' : 'login'">
+          {{ authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Login' }}
+        </a>
       </div>
+    </div>
+    <div class="qa-panel">
+      <div class="conversation">
+        <div v-for="(msg, idx) in conversation" :key="idx" :class="msg.role">
+          <strong>{{ msg.role === 'user' ? 'You' : 'AI' }}:</strong> {{ msg.text }}
+        </div>
+      </div>
+      <form @submit.prevent="askAI" class="input-row">
+        <input v-model="question" placeholder="Ask me anything..." :disabled="loading" />
+        <button type="submit" :disabled="loading || !question.trim()">Send</button>
+      </form>
+      <div v-if="loading" class="loading">Thinking...</div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive } from 'vue'
 import PocketBase from 'pocketbase'
 
 const pb = new PocketBase(import.meta.env.VITE_PB_URL || 'http://localhost:8090')
-const code = ref('')
-const fileName = ref('my_agent_code.go')
-const agentOutput = ref([])
-const ws = ref(null)
-const isWsConnected = ref(false)
-const messageBox = reactive({ show: false, text: '' })
+const isAuthModalOpen = ref(!pb.authStore.isValid)
+const authMode = ref('login')
+const authForm = reactive({ email: '', password: '', passwordConfirm: '' })
+const authError = ref('')
 
-const showMessage = (text) => {
-  messageBox.text = text
-  messageBox.show = true
-}
-
-const connectWebSocket = () => {
-  const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8090/ws'
-  ws.value = new WebSocket(wsUrl)
-  ws.value.onopen = () => {
-    isWsConnected.value = true
-    showMessage('Connected to Go Agent!')
-  }
-  ws.value.onmessage = (event) => {
-    agentOutput.value.push(event.data)
-  }
-  ws.value.onclose = () => {
-    isWsConnected.value = false
-    showMessage('Disconnected from Go Agent. Please ensure the agent is running.')
-    setTimeout(connectWebSocket, 5000)
-  }
-  ws.value.onerror = () => {
-    isWsConnected.value = false
-    showMessage('WebSocket error. Is the Go agent running?')
-  }
-}
-
-const runCode = () => {
-  if (ws.value && ws.value.readyState === WebSocket.OPEN && code.value) {
-    ws.value.send(code.value)
-    agentOutput.value.push(`> Sending code to agent: ${fileName.value}`)
-  } else {
-    showMessage('WebSocket is not connected or code is empty.')
-  }
-}
-
-const clearOutput = () => {
-  agentOutput.value = []
-}
-
-const saveFile = async () => {
-  // Prompt for login if not authenticated
-  if (!pb.authStore.isValid) {
-    // You can show a login modal here
-    showMessage('Please log in to save files.')
-
-  }
-  if (!fileName.value.trim()) {
-    showMessage('Please enter a filename to save.');
-    return;
-  }
-  if (!code.value.trim()) {
-    showMessage('Code content cannot be empty.');
-    return;
-  }
-
+const login = async () => {
   try {
-    // Check if file exists to update, otherwise create new
-    const existingRecords = await pb.collection('files').getFullList({
-      filter: `name = "${fileName.value}"`,
-    });
-
-    let record;
-    if (existingRecords.length > 0) {
-      // Update existing record
-      record = await pb.collection('files').update(existingRecords[0].id, {
-        name: fileName.value,
-        content: code.value,
-        language: fileName.value.split('.').pop() || 'plaintext', // Infer language from extension
-      });
-      showMessage(`File '${fileName.value}' updated successfully!`);
-    } else {
-      // Create new record
-      record = await pb.collection('files').create({
-        name: fileName.value,
-        content: code.value,
-        language: fileName.value.split('.').pop() || 'plaintext',
-      });
-      showMessage(`File '${fileName.value}' saved successfully!`);
-    }
-    console.log('File saved/updated:', record);
-  } catch (error) {
-    console.error('Error saving file:', error);
-    showMessage(`Error saving file: ${error.message}. Is PocketBase running?`);
+    await pb.collection('users').authWithPassword(authForm.email, authForm.password)
+    isAuthModalOpen.value = false
+    authError.value = ''
+  } catch (e) {
+    authError.value = e.message
   }
 }
 
-const loadFile = async () => {
-  // Prompt for login if not authenticated
-  if (!pb.authStore.isValid) {
-    showMessage('Please log in to load files.')
-
-  }
-  if (!fileName.value.trim()) {
-    showMessage('Please enter a filename to load.');
-    return;
-  }
-
+const register = async () => {
   try {
-    const records = await pb.collection('files').getFullList({
-      filter: `name = "${fileName.value}"`,
-    });
-
-    if (records.length > 0) {
-      code.value = records[0].content;
-      showMessage(`File '${fileName.value}' loaded successfully!`);
-    } else {
-      showMessage(`File '${fileName.value}' not found.`);
-      code.value = ''; // Clear editor if not found
-    }
-  } catch (error) {
-    console.error('Error loading file:', error);
-    showMessage(`Error loading file: ${error.message}. Is PocketBase running?`);
+    await pb.collection('users').create({
+      email: authForm.email,
+      password: authForm.password,
+      passwordConfirm: authForm.passwordConfirm,
+    })
+    await login()
+  } catch (e) {
+    authError.value = e.message
   }
 }
 
-onMounted(() => {
-  connectWebSocket()
-})
+// Q&A logic
+const question = ref('')
+const conversation = ref([])
+const loading = ref(false)
+
+const askAI = async () => {
+  if (!question.value.trim()) return
+  const userMsg = { role: 'user', text: question.value }
+  conversation.value.push(userMsg)
+  loading.value = true
+  try {
+    const res = await fetch(`${import.meta.env.VITE_PB_URL || 'http://localhost:8090'}/api/ask/ai`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pb.authStore.token}`,
+      },
+      body: JSON.stringify({ input: question.value }),
+    })
+    const data = await res.json()
+    if (data.response) {
+      conversation.value.push({ role: 'ai', text: data.response })
+    } else {
+      conversation.value.push({ role: 'ai', text: data.error || 'Error from AI' })
+    }
+  } catch (e) {
+    conversation.value.push({ role: 'ai', text: 'Network error or server not available.' })
+  }
+  question.value = ''
+  loading.value = false
+}
 </script>
 
 <style scoped>
-/* Add styles to match your screenshot */
+.container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f7f9fb;
+}
+.qa-panel {
+  background: #23242d;
+  border-radius: 12px;
+  padding: 2rem;
+  min-width: 400px;
+  max-width: 600px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.conversation {
+  background: #181920;
+  color: #fff;
+  border-radius: 8px;
+  padding: 1rem;
+  min-height: 200px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: 'Fira Mono', 'Consolas', monospace;
+  margin-bottom: 1rem;
+}
+.user { color: #2ecc40; }
+.ai { color: #39cccc; }
+.input-row {
+  display: flex;
+  gap: 1rem;
+}
+.input-row input {
+  flex: 1;
+  padding: 0.7rem;
+  border-radius: 6px;
+  border: none;
+  font-size: 1rem;
+  background: #fff;
+}
+.input-row button {
+  background: #2ecc40;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.7rem 1.5rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.loading {
+  color: #fff;
+  text-align: center;
+  margin-top: 1rem;
+}
+.modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-content {
+  background: #23242d;
+  color: #fff;
+  padding: 2rem 2.5rem;
+  border-radius: 10px;
+  min-width: 300px;
+  text-align: center;
+}
+.modal-content button {
+  margin-top: 1rem;
+  background: #2ecc40;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1.5rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.error {
+  color: #ff4136;
+  margin: 0.5rem 0;
+}
 </style>
