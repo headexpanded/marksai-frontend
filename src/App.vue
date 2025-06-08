@@ -83,8 +83,44 @@ const saveFile = async () => {
     showMessage('Please log in to save files.')
 
   }
-  // Save or update file in PocketBase
-  // ... (same as your previous logic)
+  if (!fileName.value.trim()) {
+    showMessage('Please enter a filename to save.');
+    return;
+  }
+  if (!code.value.trim()) {
+    showMessage('Code content cannot be empty.');
+    return;
+  }
+
+  try {
+    // Check if file exists to update, otherwise create new
+    const existingRecords = await pb.collection('files').getFullList({
+      filter: `name = "${fileName.value}"`,
+    });
+
+    let record;
+    if (existingRecords.length > 0) {
+      // Update existing record
+      record = await pb.collection('files').update(existingRecords[0].id, {
+        name: fileName.value,
+        content: code.value,
+        language: fileName.value.split('.').pop() || 'plaintext', // Infer language from extension
+      });
+      showMessage(`File '${fileName.value}' updated successfully!`);
+    } else {
+      // Create new record
+      record = await pb.collection('files').create({
+        name: fileName.value,
+        content: code.value,
+        language: fileName.value.split('.').pop() || 'plaintext',
+      });
+      showMessage(`File '${fileName.value}' saved successfully!`);
+    }
+    console.log('File saved/updated:', record);
+  } catch (error) {
+    console.error('Error saving file:', error);
+    showMessage(`Error saving file: ${error.message}. Is PocketBase running?`);
+  }
 }
 
 const loadFile = async () => {
@@ -93,8 +129,27 @@ const loadFile = async () => {
     showMessage('Please log in to load files.')
 
   }
-  // Load file from PocketBase
-  // ... (same as your previous logic)
+  if (!fileName.value.trim()) {
+    showMessage('Please enter a filename to load.');
+    return;
+  }
+
+  try {
+    const records = await pb.collection('files').getFullList({
+      filter: `name = "${fileName.value}"`,
+    });
+
+    if (records.length > 0) {
+      code.value = records[0].content;
+      showMessage(`File '${fileName.value}' loaded successfully!`);
+    } else {
+      showMessage(`File '${fileName.value}' not found.`);
+      code.value = ''; // Clear editor if not found
+    }
+  } catch (error) {
+    console.error('Error loading file:', error);
+    showMessage(`Error loading file: ${error.message}. Is PocketBase running?`);
+  }
 }
 
 onMounted(() => {
